@@ -19,13 +19,19 @@ package invertible
 import scalaz._, Scalaz._
 
 final case class Iso[A, B] (app: A => Option[B], unapp: B => Option[A]) {
-  // def <>[F[_]](fa: F[A]):
+  def compose[C](that: Iso[C, A]) = Iso[C, B](
+    c => that.app(c).flatMap(app),
+    b => unapp(b).flatMap(that.unapp))
 
+  /** Alias for `compose`. */
+  def <<<[C](that: Iso[C, A]): Iso[C, B] = compose(that)
+
+  /** Flipped `<<<`. */
   def >>>[C](that: Iso[B, C]) = Iso[A, C](
     a => app(a).flatMap(that.app),
     c => that.unapp(c).flatMap(unapp))
 
-  def <|>(that: Iso[A, B]): Iso[A, B] = Iso(
+  def |(that: Iso[A, B]): Iso[A, B] = Iso(
     a => this.app(a).orElse(that.app(a)),
     b => this.unapp(b).orElse(that.unapp(b)))
 
@@ -126,15 +132,13 @@ object Iso {
 }
 
 trait IsoFunctor[F[_]] {
-  // NB: Scala doesn't allow <$>
-  // def <>[A, B](iso: Iso[A, B]): F[A] => F[B]
-  def <>[A, B](iso: Iso[A, B], p: F[A]): F[B]
+  def map[A, B](p: F[A], iso: Iso[A, B]): F[B]
 }
 
 trait ProductFunctor[F[_]] {
-  def <*>[A, B](fa: F[A], fb: => F[B]): F[(A, B)]
+  def *[A, B](fa: F[A], fb: => F[B]): F[(A, B)]
 }
 
 trait Alternative[F[_]] {
-  def <|>[A](f1: F[A], f2: => F[A]): F[A]
+  def |[A](f1: F[A], f2: => F[A]): F[A]
 }
