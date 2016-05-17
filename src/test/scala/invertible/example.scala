@@ -103,7 +103,7 @@ object ExprSyntax {
   // `null` here. A cleaner approach would combine uwrapping and
   // re-wrapping so that the actual Position would be available.
   def unPos[P[_]](p: P[Cofree[Expr, Position]])(implicit S: Syntax[P]): P[Expr[Cofree[Expr, Position]]] =
-    p ∘ fix.inverse ∘ second(ignore[Position](null)) ∘ unit.inverse
+    p ^ fix.inverse ^ second(ignore[Position](null)) ^ unit.inverse
 
   /** Faster version of chainl1, which parses any set of left-associative
     * infix operators and deals with recording source locations in Cofree.
@@ -144,7 +144,7 @@ object ExprSyntax {
         loop(x)
       })
 
-    (term * many(opP * term)) ∘ flatten
+    (term * (opP * term).many) ^ flatten
   }
 
   type T = Cofree[Expr, Position]
@@ -162,19 +162,19 @@ object ExprSyntax {
     // NB: recapture the position to include the parens, which don't get a node of their own.
     def parens(f: P[T]): P[T] = node(text("(") *> unPos(f) <* text(")"))
 
-    def nullP  = node(text("null") ∘ exprNull[T])
-    def trueP  = node(text("true") ∘ (element(true) >>> exprBool[T]))
-    def falseP = node(text("false") ∘ (element(false) >>> exprBool[T]))
+    def nullP  = node(text("null") ^ exprNull[T])
+    def trueP  = node(text("true") ^ (element(true) >>> exprBool[T]))
+    def falseP = node(text("false") ^ (element(false) >>> exprBool[T]))
 
     def numP = {
       val toInt = Iso.total[List[Char], Int](
         _.mkString.toInt,
         _.toString.toList)
-      node(many1(digit) ∘ (toInt >>> exprNum[T]))
+      node(digit.many1 ^ (toInt >>> exprNum[T]))
     }
 
     def infixl(f0: P[T], ops: BinaryOperator*): P[T] = {
-      def opf(op: BinaryOperator) = optSpace *> (text(op.js) ∘ element(op)) <* optSpace
+      def opf(op: BinaryOperator) = optSpace *> (text(op.js) ^ element(op)) <* optSpace
 
       chainlp(f0, ops.toList, opf, exprBinOp)
 

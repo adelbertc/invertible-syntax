@@ -71,21 +71,21 @@ object SimpleSyntax {
     val keywords = List("ifzero", "else")
 
     val identifier =
-      (letter * many(letter | digit)) ^
+      (letter * (letter | digit).many) ^
         (cons >>> chars >>> subset(s => !(keywords contains s)))
 
-    def keyword(str: String) = (identifier <+> text(str)) ^ right.inverse
+    def keyword(str: String) = (identifier |+| text(str)) ^ right.inverse
 
     val integer =
-      many1(digit) ^ chars >>> total[String, Int](_.toInt, _.toString)
+      digit.many1 ^ chars >>> total[String, Int](_.toInt, _.toString)
 
     val parens: F[Expression] => F[Expression] =
-      between(text("("), text(")")) _
+      _.between(text("("), text(")"))
 
     val ops = text("*") ^ mulOp |
               text("+") ^ addOp
 
-    val spacedOps = between(optSpace, optSpace)(ops)
+    val spacedOps = ops.between(optSpace, optSpace)
 
     val priority: Operator => Int = {
       case MulOp => 1

@@ -40,42 +40,19 @@ trait Syntax[P[_]] extends IsoFunctor[P] with ProductFunctor[P] with Alternative
 object Syntax {
   import Iso._
 
-  // TODO: make most of these syntax on `P[_]: Syntax`
-
-  def many[A, P[_]](p: P[A])(implicit S: Syntax[P]): P[List[A]] =
-    (S.pure(()) ∘ Iso.nil[A]) | many1(p)
-
-  def many1[A, P[_]](p: P[A])(implicit S: Syntax[P]): P[List[A]] =
-    (p * many(p)) ∘ Iso.cons
-
-  def sepBy1[A, P[_]](p: P[A], sep: P[Unit])(implicit S: Syntax[P]): P[List[A]] =
-    p * many(sep *> p) ^ cons
-
   def text[A, P[_]](s: String)(implicit S: Syntax[P]): P[Unit] =
     if (s == "") S.pure(())
     else
-      S.label(S.tokenStr(s.length) ∘ element(s).inverse, "\"" + s + "\"")
+      S.label(S.tokenStr(s.length) ^ element(s).inverse, "\"" + s + "\"")
 
   def digit[P[_]](implicit S: Syntax[P]): P[Char] =
-    S.label(S.token ∘ subset[Char](_.isDigit), "digit")
+    S.label(S.token ^ subset[Char](_.isDigit), "digit")
 
   def letter[P[_]](implicit S: Syntax[P]): P[Char] =
-    S.label(S.token ∘ subset[Char](_.isLetter), "letter")
+    S.label(S.token ^ subset[Char](_.isLetter), "letter")
 
   def int[P[_]](implicit S: Syntax[P]): P[BigInt] =
-    many(digit) ^ chars ^ Iso.int
-
-  def *>[A, P[_]](f: P[Unit], g: P[A])(implicit S: Syntax[P]): P[A] =
-    (f * g) ∘ (unit[A] >>> commute).inverse
-
-  def <*[A, P[_]](f: P[A], g: P[Unit])(implicit S: Syntax[P]): P[A] =
-    (f * g) ∘ unit.inverse
-
-  def between[A, P[_]](f: P[Unit], g: P[Unit])(h: P[A])(implicit S: Syntax[P]): P[A] =
-    f *> h <* g
-
-  def optional[A, P[_]](f: P[A])(implicit S: Syntax[P]): P[Option[A]] =
-    (f ∘ some[A]) | (text("") ∘ none[A])
+    digit.many ^ chars ^ Iso.int
 
   /**
     arg: a parser/printer for each term, which will handle higher-precedence ops.
@@ -83,15 +60,15 @@ object Syntax {
     f: an iso which applies only to operators (B) with this precedence.
     */
   def chainl1[A, B, P[_]](arg: P[A], op: P[B], f: Iso[(A, (B, A)), A])(implicit S: Syntax[P]): P[A] =
-    (arg * many (op * arg)) ∘ foldl(f)
+    (arg * (op * arg).many) ^ foldl(f)
 
   /** Accept 0 or more spaces, emit none. */
   def skipSpace[P[_]](implicit S: Syntax[P]): P[Unit] =
-    many(text(" ")) ∘ ignore(List[Unit]())
+    text(" ").many ^ ignore(List[Unit]())
 
   /** Accept 0 or more spaces, emit one. */
   def optSpace[P[_]](implicit S: Syntax[P]): P[Unit] =
-    many(text(" ")) ∘ ignore(List(()))
+    text(" ").many ^ ignore(List(()))
 
   /** Accept 1 or more spaces, emit one. */
   def sepSpace[P[_]](implicit S: Syntax[P]): P[Unit] =
@@ -99,36 +76,61 @@ object Syntax {
 
   /*
     Compare with the operators from Haskell's invertible-syntax:
-    *> (9 assumed)         *> (8)
-    <* (9 assumed)         <* (5)  // That's not good (TODO: :, +, -, *, /, %) (*< ???)
-    infixr 6 <*>           * (8) (TODO: <*> (5))
-    infix  5 <$>           map/∘ (with the operands reversed) (0/9) (TODO: ^(2), &(3), =(4), !(4))
-    infixl 4 <+>           <+> (5) (TODO: |+| (1))
-    infixl 3 <|>           | (1)
+    *> (9 assumed)         *>  (8)
+    <* (9 assumed)         <*  (5)  // That's not good (TODO: :, +, -, *, /, %) (*< ???)
+    infixr 6 <*>           *   (8) (TODO: <*> (5))
+    infix  5 <$>           ^   (2)
+    infixl 4 <+>           |+| (1)
+    infixl 3 <|>           |   (1)
     (See http://scala-lang.org/files/archive/spec/2.11/06-expressions.html#infix-operations)
    */
 
-  implicit class SyntaxOps[A, P[_]](f: P[A])(implicit S: Syntax[P]) {
-    def map[B](iso: Iso[A, B]): P[B] = S.map(f, iso)
-    /** Alias for `map`. */
-    def ∘[B](iso: Iso[A, B]): P[B] = S.map(f, iso)
-    /** Alias for `map` with low precedence. */
-    def ^[B](iso: Iso[A, B]): P[B] = S.map(f, iso)
+  implicit class SyntaxOps[A, P[_]](p: P[A])(implicit S: Syntax[P]) {
+    /** "map" over the value with an Iso. */
+    def ^[B](iso: Iso[A, B]): P[B] = S.map(p, iso)
 
-    def *[B](g: => P[B]) = S.and(f, g)
+    /** Sequence (aka `and`). */
+    def *[B](q: => P[B]) = S.and(p, q)
     /** Alias for `*` with medium precedence. */
-    def <*>[B](g: => P[B]) = S.and(f, g)
+    def <*>[B](q: => P[B]) = S.and(p, q)
 
-    def |(g: => P[A]) = S.or(f, g)
+    /** Alternatives (aka `or`). */
+    def |(q: => P[A]) = S.or(p, q)
 
-    def <*(g: P[Unit]) = Syntax.<*(f, g)
+    /** Sequence, ignoring the result on the right (which must be Unit, so as
+      * not to lose information when printing). */
+    def <*(q: P[Unit]) = (p * q) ^ unit.inverse
     /** Alias for `<*` with highest precedence. */
-    def *<(g: P[Unit]) = Syntax.<*(f, g)
+    def *<(q: P[Unit]) = p <* q
 
-    def *>[B](g: P[B])(implicit ev: A === Unit) = Syntax.*>(ev.subst(f), g)
+    /** Sequence, ignoring the result on the left (which must be Unit, so as
+      * not to lose information when printing). */
+    def *>[B](q: P[B])(implicit ev: A === Unit) =
+      (ev.subst(p) * q) ^ (unit[B] >>> commute).inverse
 
-    def <+>[B](g: P[B]): P[A \/ B] = (f ∘ left[A, B]) | (g ∘ right[A, B])
-    // TODO: |+|
+    /** Alternatives, capturing both types in disjunction. */
+    def |+|[B](q: P[B]): P[A \/ B] =
+      p ^ left[A, B] |
+      q ^ right[A, B]
+
+
+    def many: P[List[A]] =
+      (S.pure(()) ^ Iso.nil[A]) | p.many1
+
+    // TODO: use NonEmptyList?
+    def many1: P[List[A]] =
+      (p * p.many) ^ Iso.cons
+
+    // TODO: use NonEmptyList?
+    def sepBy1(sep: P[Unit]): P[List[A]] =
+      p * (sep *> p).many ^ cons
+
+    def optional: P[Option[A]] =
+      p ^ some[A] |
+      text("") ^ none[A]
+
+    def between(l: P[Unit], r: P[Unit]): P[A] =
+      l *> p <* r
   }
 
   /** A parser is simply a pure function from an input sequence to a tuple of:
