@@ -11,7 +11,7 @@ Define your syntax using the combinators of `Syntax[P]`. Accepting the actual in
 ```
 scala> import invertible._, Syntax._
 
-scala> def ints[P[_]](implicit S: Syntax[P]) = sepBy1(int, sepSpace)
+scala> def ints[P[_]](implicit S: Syntax[P]) = int.sepBy1(sepSpace)
 ints: [P[_]](implicit S: invertible.Syntax[P])P[List[BigInt]]
 
 ```
