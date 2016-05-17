@@ -96,9 +96,9 @@ object Iso {
   }
 
   // A gross hack for subtyping:
-  def widen[A: Manifest, B >: A] = Iso[A, B](
-    Some.apply,
-    b => if (manifest[A].runtimeClass.isAssignableFrom(b.getClass)) Some(b.asInstanceOf[A]) else None)
+  // def widen[A: Manifest, B >: A] = Iso[A, B](
+  //   Some.apply,
+  //   b => if (manifest[A].runtimeClass.isAssignableFrom(b.getClass)) Some(b.asInstanceOf[A]) else None)
 
   // Derived:
 
@@ -125,6 +125,7 @@ object Iso {
     { case -\/(()) => Nil;     case \/-((x, xs)) => x :: xs },
     { case Nil     => -\/(()); case x :: xs      => \/-((x, xs)) })
   val chars = Iso.total[List[Char], String](_.mkString, _.toList)
+  val int = Iso[String, BigInt](s => \/.fromTryCatchNonFatal(BigInt(s)).toOption, _.toString.some)
   def left[A, B]  = Iso[A, A \/ B](a => Some(-\/(a)), _.swap.toOption)
   def right[A, B] = Iso[B, A \/ B](b => Some(\/-(b)), _.toOption)
   def none[A] = Iso[Unit, Option[A]](_ => None, _.fold[Option[Unit]](Some(()))(_ => None))
@@ -136,9 +137,9 @@ trait IsoFunctor[F[_]] {
 }
 
 trait ProductFunctor[F[_]] {
-  def *[A, B](fa: F[A], fb: => F[B]): F[(A, B)]
+  def and[A, B](fa: F[A], fb: => F[B]): F[(A, B)]
 }
 
 trait Alternative[F[_]] {
-  def |[A](f1: F[A], f2: => F[A]): F[A]
+  def or[A](f1: F[A], f2: => F[A]): F[A]
 }

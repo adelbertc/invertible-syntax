@@ -20,8 +20,8 @@ import scalaz._, Scalaz._
 import Leibniz.===
 
 trait Syntax[P[_]] extends IsoFunctor[P] with ProductFunctor[P] with Alternative[P] {
-  // Defined directly in Syntax
-  def pure[A](a: A)(implicit E: Equal[A]): P[A]
+  /** A value that does not appear in the text at all. */
+  def pure[A](a: A): P[A]
 
   /** Pull(push) a single char from(to) the text. */
   def token: P[Char]
@@ -40,11 +40,16 @@ trait Syntax[P[_]] extends IsoFunctor[P] with ProductFunctor[P] with Alternative
 object Syntax {
   import Iso._
 
-  def many[A, P[_]](f: P[A])(implicit S: Syntax[P]): P[List[A]] =
-    (S.pure(()) ∘ Iso.nil[A]) | many1(f)
+  // TODO: make most of these syntax on `P[_]: Syntax`
 
-  def many1[A, P[_]](f: P[A])(implicit S: Syntax[P]): P[List[A]] =
-    (f * many(f)) ∘ Iso.cons
+  def many[A, P[_]](p: P[A])(implicit S: Syntax[P]): P[List[A]] =
+    (S.pure(()) ∘ Iso.nil[A]) | many1(p)
+
+  def many1[A, P[_]](p: P[A])(implicit S: Syntax[P]): P[List[A]] =
+    (p * many(p)) ∘ Iso.cons
+
+  def sepBy1[A, P[_]](p: P[A], sep: P[Unit])(implicit S: Syntax[P]): P[List[A]] =
+    p * many(sep *> p) ^ cons
 
   def text[A, P[_]](s: String)(implicit S: Syntax[P]): P[Unit] =
     if (s == "") S.pure(())
@@ -56,6 +61,9 @@ object Syntax {
 
   def letter[P[_]](implicit S: Syntax[P]): P[Char] =
     S.label(S.token ∘ subset[Char](_.isLetter), "letter")
+
+  def int[P[_]](implicit S: Syntax[P]): P[BigInt] =
+    many(digit) ^ chars ^ Iso.int
 
   def *>[A, P[_]](f: P[Unit], g: P[A])(implicit S: Syntax[P]): P[A] =
     (f * g) ∘ (unit[A] >>> commute).inverse
@@ -89,19 +97,38 @@ object Syntax {
   def sepSpace[P[_]](implicit S: Syntax[P]): P[Unit] =
     text(" ") <* skipSpace
 
+  /*
+    Compare with the operators from Haskell's invertible-syntax:
+    *> (9 assumed)         *> (8)
+    <* (9 assumed)         <* (5)  // That's not good (TODO: :, +, -, *, /, %) (*< ???)
+    infixr 6 <*>           * (8) (TODO: <*> (5))
+    infix  5 <$>           map/∘ (with the operands reversed) (0/9) (TODO: ^(2), &(3), =(4), !(4))
+    infixl 4 <+>           <+> (5) (TODO: |+| (1))
+    infixl 3 <|>           | (1)
+    (See http://scala-lang.org/files/archive/spec/2.11/06-expressions.html#infix-operations)
+   */
+
   implicit class SyntaxOps[A, P[_]](f: P[A])(implicit S: Syntax[P]) {
     def map[B](iso: Iso[A, B]): P[B] = S.map(f, iso)
-    def ∘[B](iso: Iso[A, B]): P[B] = map(iso)
+    /** Alias for `map`. */
+    def ∘[B](iso: Iso[A, B]): P[B] = S.map(f, iso)
+    /** Alias for `map` with low precedence. */
+    def ^[B](iso: Iso[A, B]): P[B] = S.map(f, iso)
 
-    def *[B](g: => P[B]) = S.*(f, g)
+    def *[B](g: => P[B]) = S.and(f, g)
+    /** Alias for `*` with medium precedence. */
+    def <*>[B](g: => P[B]) = S.and(f, g)
 
-    def |(g: => P[A]) = S.|(f, g)
+    def |(g: => P[A]) = S.or(f, g)
 
     def <*(g: P[Unit]) = Syntax.<*(f, g)
+    /** Alias for `<*` with highest precedence. */
+    def *<(g: P[Unit]) = Syntax.<*(f, g)
 
     def *>[B](g: P[B])(implicit ev: A === Unit) = Syntax.*>(ev.subst(f), g)
 
     def <+>[B](g: P[B]): P[A \/ B] = (f ∘ left[A, B]) | (g ∘ right[A, B])
+    // TODO: |+|
   }
 
   /** A parser is simply a pure function from an input sequence to a tuple of:
@@ -119,7 +146,7 @@ object Syntax {
         })
     }
 
-    def *[A, B](fa: Parser[A], fb: => Parser[B]) = { r =>
+    def and[A, B](fa: Parser[A], fb: => Parser[B]) = { r =>
       val (e1, ps1) = fa(r)
       val (e2s: List[Option[ParseFailure]], ps2s: List[List[((A, B), Source)]]) =
         ps1.map { case (a, r1) =>
@@ -130,13 +157,13 @@ object Syntax {
         ps2s.flatten)
     }
 
-    def |[A](f1: Parser[A], f2: => Parser[A]) = { r =>
+    def or[A](f1: Parser[A], f2: => Parser[A]) = { r =>
       val (e1, ps1) = f1(r)
       val (e2, ps2) = f2(r)
       (e1 |+| e2, ps1 ++ ps2)
     }
 
-    def pure[A](a: A)(implicit E: Equal[A]) =
+    def pure[A](a: A) =
       r => (None, List((a, r)))
 
     def token: Parser[Char] = r =>
@@ -173,9 +200,9 @@ object Syntax {
       val as = ps.collect { case (a, rem) if rem.atEnd => a }
       (err, as) match {
         case (_, a :: Nil)            => \/-(a)
-        case (_, as) if as.length > 1 => -\/(sys.error("TODO: ambiguous parse"))
+        case (_, as) if as.length > 1 => sys.error("TODO: ambiguous parse")
         case (Some(err), Nil)         => -\/(err)
-        case (None, Nil)              => -\/(sys.error("TODO: no parse and no error"))
+        case (None, Nil)              => sys.error("TODO: no parse and no error")
       }
     }
   }
@@ -187,20 +214,17 @@ object Syntax {
     def map[A, B](p: Printer[A], iso: Iso[A, B]) =
       b => iso.unapp(b).flatMap(p)
 
-    def *[A, B](fa: Printer[A], fb: => Printer[B]) =
+    def and[A, B](fa: Printer[A], fb: => Printer[B]) =
       { case (a, b) => (fa(a) |@| fb(b))(_ ++ _) }
 
-    def |[A](f1: Printer[A], f2: => Printer[A]) =
+    def or[A](f1: Printer[A], f2: => Printer[A]) =
       a => f1(a).orElse(f2(a))
 
-    def pure[A](a: A)(implicit E: Equal[A]) =
-      x => if (x == a) Some("") else None
+    def pure[A](a: A) = x => if (x == a) Some("") else None
 
-    def token: Printer[Char] =
-      c => Some(c.toString)
+    def token = c => Some(c.toString)
 
-    def tokenStr(length: Int) =
-      c => Some(c)
+    def tokenStr(length: Int) = s => Some(s)
 
     def pos[A](p: Printer[A]) = { case (a, _) => p(a) }
 
